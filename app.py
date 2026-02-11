@@ -46,14 +46,11 @@ def normalize_addon_code(x) -> str:
 
 
 def detect_platform_from_filename(filename: str) -> str:
-    """Return 'tiktok' or 'shopee'. Default: tiktok (M3)."""
-    name = (filename or "").lower()
-    if "shopee" in name:
-        return "shopee"
-    if "tiktok" in name:
-        return "tiktok"
-    # default
-    return "tiktok"
+    """
+    Sekarang tidak dipakai untuk menentukan harga (karena harga selalu pakai M4),
+    tapi biar flow tetap aman kita return nilai tetap.
+    """
+    return "shopee"
 
 
 def parse_platform_sku(full_sku: str) -> Tuple[str, List[str]]:
@@ -119,19 +116,13 @@ def parse_price_cell(val) -> Optional[int]:
     s = s.replace("Rp", "").replace("rp", "").replace(" ", "")
 
     # kasus indonesia: 9.300 (titik ribuan)
-    # kalau ada koma sebagai desimal, kita ubah dulu
-    # strategi:
-    #  - jika ada '.' dan tidak ada ',' -> remove '.'
-    #  - jika ada ',' dan '.' -> asumsi '.' ribuan, ',' desimal -> remove '.', replace ',' with '.'
     if "." in s and "," in s:
         s = s.replace(".", "").replace(",", ".")
     elif "." in s and "," not in s:
         s = s.replace(".", "")
     elif "," in s and "." not in s:
-        # anggap koma pemisah ribuan? (jarang) -> remove ','
         s = s.replace(",", "")
 
-    # keep digits + optional decimal
     try:
         f = float(s)
         if f.is_integer():
@@ -160,14 +151,11 @@ def safe_set_cell_value(ws, row: int, col: int, value):
     """
     cell = ws.cell(row=row, column=col)
     if isinstance(cell, MergedCell):
-        # cari merged range yang mencakup cell ini
         coord = cell.coordinate
         for merged in ws.merged_cells.ranges:
             if coord in merged:
-                # tulis ke start cell
                 ws.cell(row=merged.min_row, column=merged.min_col).value = value
                 return
-        # fallback: skip
         return
     cell.value = value
 
@@ -189,12 +177,8 @@ def find_header_row_and_cols_mass(ws) -> Tuple[int, int, int]:
         row_vals = []
         for c in range(1, ws.max_column + 1):
             v = ws.cell(row=r, column=c).value
-            if v is None:
-                row_vals.append("")
-            else:
-                row_vals.append(str(v).strip())
+            row_vals.append("" if v is None else str(v).strip())
 
-        # mapping lower->col
         lower_map = {str(v).strip().lower(): i + 1 for i, v in enumerate(row_vals) if str(v).strip() != ""}
         if target_a in lower_map and target_b in lower_map:
             return r, lower_map[target_a], lower_map[target_b]
@@ -211,7 +195,7 @@ def find_header_row_and_cols_pricelist(ws) -> Tuple[int, int, int, int]:
     target_m3 = PL_PRICE_COL_TIKTOK.lower()
     target_m4 = PL_PRICE_COL_SHOPEE.lower()
 
-    for r in range(1, 60):  # pricelist biasanya banyak header
+    for r in range(1, 60):
         row_vals = []
         for c in range(1, ws.max_column + 1):
             v = ws.cell(row=r, column=c).value
@@ -222,7 +206,6 @@ def find_header_row_and_cols_pricelist(ws) -> Tuple[int, int, int, int]:
             lv = v.strip().lower()
             if not lv:
                 continue
-            # jika duplicate header, ambil yang pertama saja
             if lv not in lower_to_col:
                 lower_to_col[lv] = idx
 
@@ -256,7 +239,6 @@ def load_pricelist_map(pl_bytes: bytes) -> Dict[str, Dict[str, int]]:
         if not sku:
             continue
 
-        # normalize sku for matching: keep as-is
         m3_raw = parse_price_cell(ws.cell(row=r, column=m3_col).value)
         m4_raw = parse_price_cell(ws.cell(row=r, column=m4_col).value)
 
@@ -286,7 +268,6 @@ def load_addon_map(addon_bytes: bytes) -> Dict[str, int]:
     wb = load_workbook(io.BytesIO(addon_bytes), data_only=True)
     ws = wb.active
 
-    # cari header row dalam 1..30
     header_row = None
     code_col = None
     price_col = None
@@ -357,7 +338,7 @@ class RowChange:
 
 def compute_new_price_for_row(
     sku_full: str,
-    platform: str,
+    platform: str,  # tetap ada biar signature tidak berubah
     pl_map: Dict[str, Dict[str, int]],
     addon_map: Dict[str, int],
     discount_rp: int,
@@ -366,9 +347,10 @@ def compute_new_price_for_row(
     Return (new_price or None, reason).
     If None -> do not change anything.
     Rules:
-      - base SKU must exist in pricelist with M3/M4 based on platform
-      - if ANY addon code missing in addon_map -> None (do not change)
-      - final = base + sum(addons) - discount_rp
+      - base SKU must exist di pricelist
+      - harga selalu pakai M4
+      - jika ANY addon code missing di addon_map -> None (do not change)
+      - final = base(M4) + sum(addons) - discount_rp
       - no rounding
     """
     base_sku, addons = parse_platform_sku(sku_full)
@@ -379,12 +361,11 @@ def compute_new_price_for_row(
     if not pl:
         return None, "Base SKU tidak ada di Pricelist"
 
-    price_key = "M3" if platform == "tiktok" else "M4"
+    price_key = "M4"  # ✅ SELALU M4
     base_price = pl.get(price_key)
     if base_price is None:
         return None, f"Harga {price_key} kosong di Pricelist"
 
-    # addon: case-insensitive
     addon_total = 0
     for a in addons:
         code = normalize_addon_code(a)
@@ -424,10 +405,9 @@ def workbook_to_bytes(wb) -> bytes:
 # =========================
 # UI
 # =========================
-st.set_page_config(page_title="Web App Update Harga", layout="wide")
-st.title("Web App Update Harga")
+st.set_page_config(page_title="Harga Tiktokshop", layout="wide")
+st.title("Harga Tiktokshop")
 
-# Upload row: 3 columns (bagusan yang sejajar)
 c1, c2, c3 = st.columns(3)
 with c1:
     mass_files = st.file_uploader(
@@ -468,7 +448,7 @@ if process:
 
     for mf in mass_files:
         filename = mf.name
-        platform = detect_platform_from_filename(filename)
+        platform = detect_platform_from_filename(filename)  # sekarang cuma placeholder
 
         wb = load_workbook(io.BytesIO(mf.getvalue()))
         ws = wb.active
@@ -486,14 +466,11 @@ if process:
             ))
             continue
 
-        # iterasi data mulai header_row+1 sampai max_row
-        # (data kamu biasanya mulai baris 6, tapi kita biarkan auto dari header)
         file_changed_count = 0
         for r in range(header_row + 1, ws.max_row + 1):
             sku_val = ws.cell(row=r, column=sku_col).value
             sku_full = parse_number_like_id(sku_val)
             if not sku_full:
-                # skip baris kosong, tapi jangan break (kadang ada blank di tengah)
                 continue
 
             old_price_raw = parse_price_cell(ws.cell(row=r, column=price_col).value)
@@ -508,13 +485,11 @@ if process:
             )
 
             if new_price is None:
-                # aturan kamu: kalau ada 1 saja yang gak ketemu -> tidak ubah apapun
                 continue
 
             if int(new_price) == int(old_price):
                 continue
 
-            # set value aman
             safe_set_cell_value(ws, row=r, col=price_col, value=int(new_price))
             file_changed_count += 1
 
@@ -531,12 +506,10 @@ if process:
         out_name = filename.replace(".xlsx", "_updated.xlsx")
         output_files.append((out_name, out_bytes))
 
-    # Preview: hanya yang berubah
     st.subheader("Preview (yang berubah saja)")
     if not changed_rows:
         st.info("Tidak ada perubahan harga (mungkin SKU tidak ketemu di Pricelist / addon tidak cocok / atau harga sama).")
     else:
-        # tampilkan 200 pertama biar ringan
         import pandas as pd
         df_preview = pd.DataFrame([{
             "file": x.file,
@@ -550,7 +523,6 @@ if process:
 
     st.divider()
 
-    # Download output: kalau banyak -> ZIP
     if len(output_files) == 1:
         name, data = output_files[0]
         st.download_button(
@@ -564,7 +536,6 @@ if process:
         with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as zf:
             for name, data in output_files:
                 zf.writestr(name, data)
-            # juga masukkan report perubahan
             rep = make_issues_workbook(changed_rows)
             zf.writestr("changes_report.xlsx", rep)
 
@@ -575,7 +546,6 @@ if process:
             mime="application/zip",
         )
 
-    # Report perubahan juga terpisah
     if changed_rows:
         rep_bytes = make_issues_workbook(changed_rows)
         st.download_button(
