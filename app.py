@@ -41,24 +41,15 @@ def normalize_text(x) -> str:
 
 
 def normalize_addon_code(x) -> str:
-    # addon code tidak peka besar/kecil
     return normalize_text(x).upper()
 
 
 def detect_platform_from_filename(filename: str) -> str:
-    """
-    Sekarang tidak dipakai untuk menentukan harga (karena harga selalu pakai M4),
-    tapi biar flow tetap aman kita return nilai tetap.
-    """
+    # Placeholder saja (harga sekarang selalu pakai M4)
     return "shopee"
 
 
 def parse_platform_sku(full_sku: str) -> Tuple[str, List[str]]:
-    """
-    Contoh: ND-LAP-LE-82XQ00HX1D+PC+BA
-    base = ND-LAP-LE-82XQ00HX1D
-    addons = ["PC","BA"]
-    """
     if full_sku is None:
         return "", []
 
@@ -73,10 +64,6 @@ def parse_platform_sku(full_sku: str) -> Tuple[str, List[str]]:
 
 
 def parse_number_like_id(x) -> str:
-    """
-    Biar SKU yang kebaca angka nggak jadi 1.234E+12.
-    Kalau x numeric -> convert ke int string (tanpa .0).
-    """
     if x is None:
         return ""
     if isinstance(x, (int,)):
@@ -89,17 +76,9 @@ def parse_number_like_id(x) -> str:
 
 
 def parse_price_cell(val) -> Optional[int]:
-    """
-    Return integer Rupiah (tanpa simbol).
-    Bisa handle:
-      - 9300 -> dianggap 9.300.000 (akan dikali 1000 oleh apply_multiplier_if_needed)
-      - "9.300" -> jadi 9300
-      - "15,900" -> jadi 15.9 (jarang) -> kita handle secara aman
-    """
     if val is None:
         return None
 
-    # Excel numeric
     if isinstance(val, (int, float)):
         try:
             if isinstance(val, float) and val.is_integer():
@@ -112,10 +91,8 @@ def parse_price_cell(val) -> Optional[int]:
     if not s:
         return None
 
-    # buang spasi & mata uang
     s = s.replace("Rp", "").replace("rp", "").replace(" ", "")
 
-    # kasus indonesia: 9.300 (titik ribuan)
     if "." in s and "," in s:
         s = s.replace(".", "").replace(",", ".")
     elif "." in s and "," not in s:
@@ -133,10 +110,6 @@ def parse_price_cell(val) -> Optional[int]:
 
 
 def apply_multiplier_if_needed(x: int) -> int:
-    """
-    Kalau angka kecil (<1jt), kita anggap itu 'tanpa 000' -> x*1000.
-    Kalau sudah besar, biarkan.
-    """
     if x is None:
         return 0
     if x < SMALL_TO_THOUSAND_THRESHOLD:
@@ -145,10 +118,6 @@ def apply_multiplier_if_needed(x: int) -> int:
 
 
 def safe_set_cell_value(ws, row: int, col: int, value):
-    """
-    Aman untuk merged cell: kalau cell target adalah MergedCell (read-only),
-    kita tulis ke top-left dari merged range.
-    """
     cell = ws.cell(row=row, column=col)
     if isinstance(cell, MergedCell):
         coord = cell.coordinate
@@ -164,16 +133,10 @@ def safe_set_cell_value(ws, row: int, col: int, value):
 # Excel scanning: find header row & column indexes
 # =========================
 def find_header_row_and_cols_mass(ws) -> Tuple[int, int, int]:
-    """
-    Cari header row yang mengandung:
-      - "SKU Penjual"
-      - "Harga Ritel (Mata Uang Lokal)"
-    Return: (header_row_idx, sku_col_idx, price_col_idx)
-    """
     target_a = MASS_HEADER_SKU.strip().lower()
     target_b = MASS_HEADER_PRICE.strip().lower()
 
-    for r in range(1, 30):  # scan 1..29
+    for r in range(1, 30):
         row_vals = []
         for c in range(1, ws.max_column + 1):
             v = ws.cell(row=r, column=c).value
@@ -187,10 +150,6 @@ def find_header_row_and_cols_mass(ws) -> Tuple[int, int, int]:
 
 
 def find_header_row_and_cols_pricelist(ws) -> Tuple[int, int, int, int]:
-    """
-    Cari header row yang mengandung SKU/KODEBARANG dan M3 & M4.
-    Return: (header_row_idx, sku_col_idx, m3_col_idx, m4_col_idx)
-    """
     candidates = [c.strip().lower() for c in PL_HEADER_SKU_CANDIDATES]
     target_m3 = PL_PRICE_COL_TIKTOK.lower()
     target_m4 = PL_PRICE_COL_SHOPEE.lower()
@@ -222,11 +181,6 @@ def find_header_row_and_cols_pricelist(ws) -> Tuple[int, int, int, int]:
 
 
 def load_pricelist_map(pl_bytes: bytes) -> Dict[str, Dict[str, int]]:
-    """
-    Return map:
-      base_sku -> {"M3": price_int, "M4": price_int}
-    Harga akan auto *1000 jika angkanya kecil.
-    """
     wb = load_workbook(io.BytesIO(pl_bytes), data_only=True)
     ws = wb.active
 
@@ -258,13 +212,6 @@ def load_pricelist_map(pl_bytes: bytes) -> Dict[str, Dict[str, int]]:
 
 
 def load_addon_map(addon_bytes: bytes) -> Dict[str, int]:
-    """
-    Addon mapping Excel:
-      kolom addon_code / harga (nama bisa beda), kita cari dari kandidat.
-    Harga juga auto *1000 jika kecil.
-    Return:
-      ADDON_CODE_UPPER -> harga_int
-    """
     wb = load_workbook(io.BytesIO(addon_bytes), data_only=True)
     ws = wb.active
 
@@ -343,16 +290,6 @@ def compute_new_price_for_row(
     addon_map: Dict[str, int],
     discount_rp: int,
 ) -> Tuple[Optional[int], str]:
-    """
-    Return (new_price or None, reason).
-    If None -> do not change anything.
-    Rules:
-      - base SKU must exist di pricelist
-      - harga selalu pakai M4
-      - jika ANY addon code missing di addon_map -> None (do not change)
-      - final = base(M4) + sum(addons) - discount_rp
-      - no rounding
-    """
     base_sku, addons = parse_platform_sku(sku_full)
     if not base_sku:
         return None, "SKU kosong"
@@ -448,7 +385,7 @@ if process:
 
     for mf in mass_files:
         filename = mf.name
-        platform = detect_platform_from_filename(filename)  # sekarang cuma placeholder
+        platform = detect_platform_from_filename(filename)
 
         wb = load_workbook(io.BytesIO(mf.getvalue()))
         ws = wb.active
@@ -467,6 +404,7 @@ if process:
             continue
 
         file_changed_count = 0
+
         for r in range(header_row + 1, ws.max_row + 1):
             sku_val = ws.cell(row=r, column=sku_col).value
             sku_full = parse_number_like_id(sku_val)
@@ -502,9 +440,11 @@ if process:
                 reason=reason,
             ))
 
-        out_bytes = workbook_to_bytes(wb)
-        out_name = filename.replace(".xlsx", "_updated.xlsx")
-        output_files.append((out_name, out_bytes))
+        # ✅ PENTING: hanya simpan workbook kalau ada perubahan
+        if file_changed_count > 0:
+            out_bytes = workbook_to_bytes(wb)
+            out_name = filename.replace(".xlsx", "_updated.xlsx")
+            output_files.append((out_name, out_bytes))
 
     st.subheader("Preview (yang berubah saja)")
     if not changed_rows:
@@ -523,7 +463,10 @@ if process:
 
     st.divider()
 
-    if len(output_files) == 1:
+    # ✅ Download output: hanya file yang berubah
+    if len(output_files) == 0:
+        st.warning("Tidak ada file yang berubah, jadi tidak ada file output untuk didownload.")
+    elif len(output_files) == 1:
         name, data = output_files[0]
         st.download_button(
             "Download hasil (XLSX)",
@@ -536,6 +479,8 @@ if process:
         with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as zf:
             for name, data in output_files:
                 zf.writestr(name, data)
+
+            # report perubahan tetap masuk ZIP (optional tapi berguna)
             rep = make_issues_workbook(changed_rows)
             zf.writestr("changes_report.xlsx", rep)
 
@@ -546,6 +491,7 @@ if process:
             mime="application/zip",
         )
 
+    # Report perubahan juga terpisah
     if changed_rows:
         rep_bytes = make_issues_workbook(changed_rows)
         st.download_button(
