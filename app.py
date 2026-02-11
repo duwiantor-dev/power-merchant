@@ -357,8 +357,8 @@ def keep_only_changed_rows_in_place(ws, header_row: int, changed_row_numbers: Li
 # =========================
 # UI
 # =========================
-st.set_page_config(page_title="Harga Tiktokshop", layout="wide")
-st.title("Harga Tiktokshop")
+st.set_page_config(page_title="Harga Powermerchant", layout="wide")
+st.title("Harga Powermerchant")
 
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -512,3 +512,4 @@ if process:
             file_name="changes_report.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
